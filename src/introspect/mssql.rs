@@ -138,6 +138,10 @@ impl SchemaIntrospector for MsSqlIntrospector {
 /// `sqlserver://localhost:1433;user=sa;password=x` — keeps that tail as-is.
 /// Percent escapes in the URL userinfo are decoded; the ADO tail is not.
 ///
+/// A `?query` on the database path is emitted as ADO `key=value;` pairs, so
+/// `.../db?encrypt=optional&trustServerCertificate=true` reaches tiberius as
+/// connection options instead of being swallowed by the `database=` value.
+///
 /// Only a string with no recognised scheme is taken to be a ready-made ADO
 /// connection string and passed through untouched. This exists because the driver
 /// list works on URLs while tiberius works on ADO strings.
@@ -177,6 +181,17 @@ pub fn to_ado_string(url: &str) -> Result<String, IntrospectError> {
         return Err(bad("the connection URL has no host"));
     }
 
+    // Connection options arrive as a `?query` on the database path (dadbod emits
+    // `encrypt` and `trustServerCertificate` that way). Split it off here, or it
+    // would be glued onto the `database=` value and never reach tiberius.
+    let (database, query) = match database {
+        Some(database) => match database.split_once('?') {
+            Some((database, query)) => (Some(database), Some(query)),
+            None => (Some(database), None),
+        },
+        None => (None, None),
+    };
+
     let (userinfo, hostport) = match authority.rsplit_once('@') {
         Some((userinfo, hostport)) => (Some(userinfo), hostport),
         None => (None, authority),
@@ -207,6 +222,23 @@ pub fn to_ado_string(url: &str) -> Result<String, IntrospectError> {
     let database = database.unwrap_or_default().trim_matches('/');
     if !database.is_empty() {
         ado.push_str(&format!("database={database};"));
+    }
+    if let Some(query) = query {
+        for pair in query.split('&') {
+            if pair.is_empty() {
+                continue;
+            }
+            match pair.split_once('=') {
+                Some((key, value)) => {
+                    ado.push_str(&format!(
+                        "{}={};",
+                        percent_decode(key),
+                        percent_decode(value)
+                    ));
+                }
+                None => ado.push_str(&format!("{};", percent_decode(pair))),
+            }
+        }
     }
     if let Some(ado_tail) = ado_tail {
         let ado_tail = ado_tail.trim().trim_end_matches(';');
@@ -522,6 +554,26 @@ mod tests {
         assert_eq!(
             to_ado_string("tds://localhost/db").unwrap(),
             "server=tcp:localhost,1433;database=db;"
+        );
+    }
+
+    #[test]
+    fn query_params_become_ado_tail() {
+        assert_eq!(
+            to_ado_string(
+                "sqlserver://sa:secret@localhost:1433/child?encrypt=optional&trustServerCertificate=true"
+            )
+            .unwrap(),
+            "server=tcp:localhost,1433;user=sa;password=secret;database=child;encrypt=optional;trustServerCertificate=true;"
+        );
+    }
+
+    #[test]
+    fn query_params_are_percent_decoded() {
+        assert_eq!(
+            to_ado_string("mssql://sa@localhost/db?trustServerCertificate=true&encrypt=optional")
+                .unwrap(),
+            "server=tcp:localhost,1433;user=sa;database=db;trustServerCertificate=true;encrypt=optional;"
         );
     }
 
