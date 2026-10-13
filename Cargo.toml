@@ -1,0 +1,38 @@
+[package]
+name = "sqlv"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+description = "Keyboard-driven terminal ER diagram viewer for live SQL databases"
+readme = "README.md"
+
+[dependencies]
+async-trait = "0.1"
+crossterm = "0.29"
+ratatui = "0.30"
+sqlx = { version = "0.7", default-features = false, features = [
+    "runtime-tokio-rustls",
+    "sqlite",
+    "postgres",
+    "mysql",
+] }
+tiberius = { version = "0.12", default-features = false, features = [
+    "tds73",
+    "rustls",
+    "sql-browser-tokio",
+] }
+tokio = { version = "1", features = ["rt", "macros", "net", "io-util", "time", "sync"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+# Workaround for a rustc 1.99.0 codegen miscompile at opt-level >= 2: it
+# miscompiles the bounds check in EdgeRoute::path_chars, so release tests
+# panic with "index out of bounds: the len is 3 but the index is 3" and the
+# optimized binary traps. opt-level 1 (and 0/s/z) generate correct code.
+# Revisit (try opt-level = 3) after upgrading the Rust toolchain.
+opt-level = 1
+lto = "thin"
